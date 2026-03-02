@@ -109,22 +109,65 @@ export class MessageRenderer {
 </div>`;
   }
 
-  updateStreamingMessage(messageElement, content) {
-    const contentDiv = messageElement.querySelector('.message-content');
-    if (contentDiv) {
-      // During streaming, use escaped text (markdown applied on finalize)
-      contentDiv.innerHTML = this.escapeHtml(content);
+  updateStreamingThinking(messageElement, thinking) {
+    let thinkingDiv = messageElement.querySelector('.streaming-thinking');
+    if (!thinkingDiv) {
+      const contentDiv = messageElement.querySelector('.message-content');
+      if (!contentDiv) return;
+      thinkingDiv = document.createElement('div');
+      thinkingDiv.className = 'thinking-block streaming-thinking';
+      thinkingDiv.innerHTML = `
+        <div class="thinking-toggle expanded" onclick="var c=this.nextElementSibling;c.classList.toggle('expanded');this.classList.toggle('expanded')">
+          <span class="chevron">▶</span>
+          <span>💭 Thinking...</span>
+        </div>
+        <div class="thinking-content expanded"></div>`;
+      contentDiv.prepend(thinkingDiv);
+    }
+    const contentEl = thinkingDiv.querySelector('.thinking-content');
+    if (contentEl) {
+      contentEl.textContent = thinking;
       this.scrollToBottom();
     }
   }
 
-  finalizeStreamingMessage(messageElement, usage = null) {
+  updateStreamingMessage(messageElement, content) {
+    const contentDiv = messageElement.querySelector('.message-content');
+    if (contentDiv) {
+      // Keep any thinking block, update only the text part
+      const thinkingBlock = contentDiv.querySelector('.streaming-thinking');
+      const escaped = this.escapeHtml(content);
+      if (thinkingBlock) {
+        // Remove everything after the thinking block and re-add text
+        let textNode = contentDiv.querySelector('.streaming-text');
+        if (!textNode) {
+          textNode = document.createElement('div');
+          textNode.className = 'streaming-text';
+          contentDiv.appendChild(textNode);
+        }
+        textNode.innerHTML = escaped;
+      } else {
+        contentDiv.innerHTML = escaped;
+      }
+      this.scrollToBottom();
+    }
+  }
+
+  finalizeStreamingMessage(messageElement, usage = null, thinking = '') {
     const contentDiv = messageElement.querySelector('.message-content');
     if (contentDiv) {
       contentDiv.classList.remove('streaming');
-      // Now render as markdown
-      const rawText = contentDiv.textContent;
-      contentDiv.innerHTML = renderMarkdown(rawText);
+      // Get the raw text (exclude thinking block text)
+      const streamingText = contentDiv.querySelector('.streaming-text');
+      const rawText = streamingText ? streamingText.textContent : contentDiv.textContent;
+      
+      // Rebuild with thinking block (if any) + markdown text
+      let html = '';
+      if (thinking) {
+        html += this.renderThinkingBlock(thinking);
+      }
+      html += renderMarkdown(rawText);
+      contentDiv.innerHTML = html;
     }
 
     // Add copy button after streaming finishes

@@ -226,10 +226,13 @@ function handleAgentEnd() {
   }
 }
 
+let currentStreamingThinking = '';
+
 function handleMessageStart(message) {
   if (message.role === 'assistant') {
     showTypingIndicator(false);
     currentStreamingText = '';
+    currentStreamingThinking = '';
     currentStreamingElement = messageRenderer.renderAssistantMessage(
       { content: '' },
       true
@@ -258,9 +261,13 @@ function getMessageText(message) {
 function handleMessageUpdate(event) {
   const { assistantMessageEvent } = event;
 
-  if (assistantMessageEvent.type === 'text_delta') {
+  if (assistantMessageEvent.type === 'thinking_delta') {
+    currentStreamingThinking += assistantMessageEvent.delta;
+    if (currentStreamingElement) {
+      messageRenderer.updateStreamingThinking(currentStreamingElement, currentStreamingThinking);
+    }
+  } else if (assistantMessageEvent.type === 'text_delta') {
     currentStreamingText += assistantMessageEvent.delta;
-
     if (currentStreamingElement) {
       messageRenderer.updateStreamingMessage(
         currentStreamingElement,
@@ -274,8 +281,10 @@ function handleMessageEnd(message) {
   if (currentStreamingElement) {
     // Pass usage info for cost display
     const usage = message?.usage || null;
-    messageRenderer.finalizeStreamingMessage(currentStreamingElement, usage);
+    // Pass thinking content so finalize can render the thinking block
+    messageRenderer.finalizeStreamingMessage(currentStreamingElement, usage, currentStreamingThinking);
     currentStreamingElement = null;
+    currentStreamingThinking = '';
 
     // Track session cost and tokens
     if (usage?.cost?.total) {
