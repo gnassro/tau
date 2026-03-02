@@ -126,9 +126,12 @@ export class SessionSidebar {
         const title = session.name || session.firstMessage || 'Empty session';
         const time = this.formatTime(session.timestamp);
 
+        const tmuxTag = session.tmux ? '<span class="session-tag tmux-tag">tmux</span>' : '';
+
         item.innerHTML = `
           <div class="session-title-row">
             <div class="session-title" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</div>
+            ${tmuxTag}
             <button class="session-rename-btn" title="Rename">✎</button>
           </div>
           <div class="session-meta">${time}</div>

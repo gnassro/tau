@@ -538,6 +538,33 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
   // ═══════════════════════════════════════
   // Sessions list endpoint
   // ═══════════════════════════════════════
+  function getTmuxSessionFiles(): Set<string> {
+    try {
+      const { execSync } = require("node:child_process");
+      // Get tmux pane PIDs
+      const paneOutput = execSync("tmux list-panes -a -F '#{pane_pid}' 2>/dev/null", { encoding: "utf8" });
+      const tmuxFiles = new Set<string>();
+
+      for (const shellPid of paneOutput.trim().split("\n").filter(Boolean)) {
+        try {
+          // Find Pi (node) processes that are children of tmux shells
+          const children = execSync(`pgrep -P ${shellPid} 2>/dev/null`, { encoding: "utf8" });
+          for (const pid of children.trim().split("\n").filter(Boolean)) {
+            // Check what .jsonl files this process has open
+            const lsofOut = execSync(`lsof -p ${pid} 2>/dev/null | grep '\\.jsonl'`, { encoding: "utf8" });
+            for (const line of lsofOut.trim().split("\n").filter(Boolean)) {
+              const match = line.match(/\/.+\.jsonl$/);
+              if (match) tmuxFiles.add(match[0]);
+            }
+          }
+        } catch { /* no match */ }
+      }
+      return tmuxFiles;
+    } catch {
+      return new Set();
+    }
+  }
+
   async function serveSessionsList(res: http.ServerResponse) {
     try {
       if (!fs.existsSync(SESSIONS_DIR)) {
@@ -546,6 +573,7 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
         return;
       }
 
+      const tmuxFiles = getTmuxSessionFiles();
       const readline = await import("node:readline");
       const dirEntries = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
       const projects: any[] = [];
@@ -565,7 +593,8 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
             const parsed = await parseSessionFile(filePath, readline);
             if (parsed) {
               const stat = fs.statSync(filePath);
-              sessions.push({ ...parsed, file, filePath, mtime: stat.mtimeMs });
+              const isTmux = tmuxFiles.has(filePath);
+              sessions.push({ ...parsed, file, filePath, mtime: stat.mtimeMs, ...(isTmux && { tmux: true }) });
             }
           } catch { /* skip */ }
         }
