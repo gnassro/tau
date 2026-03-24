@@ -11,6 +11,10 @@ import { SessionSidebar } from './session-sidebar.js';
 import { themes, applyTheme, getCurrentTheme } from './themes.js';
 import { FileBrowser } from './file-browser.js';
 import { Launcher } from './launcher.js';
+import { ChatInput } from './chat-input.js';
+import { Autocomplete } from './autocomplete.js';
+import { CodeEditor } from './code-editor.js';
+
 
 
 // Initialize components
@@ -28,7 +32,15 @@ const sidebar = new SessionSidebar(
 );
 
 // UI elements
-const messageInput = document.getElementById('message-input');
+
+// Instantiate Modules
+const chatInput = new ChatInput('message-input', 'chat-form', sendMessage);
+const autocomplete = new Autocomplete(chatInput);
+const codeEditor = new CodeEditor(chatInput);
+
+chatInput.onImagePaste = (files) => addImageFiles(files);
+const messageInput = chatInput.element;
+
 const chatForm = document.getElementById('chat-form');
 const sendBtn = document.getElementById('send-btn');
 const abortBtn = document.getElementById('abort-btn');
@@ -104,10 +116,10 @@ document.getElementById('file-sidebar-finder').addEventListener('click', () => {
 });
 
 // Restore file sidebar state
-if (localStorage.getItem('tau-file-sidebar') === 'open') {
-  fileSidebar.classList.remove('collapsed');
-  fileBrowser.load();
-}
+// Always load the file sidebar since it's now an IDE pane!
+fileSidebar.classList.remove('collapsed');
+fileBrowser.load();
+
 
 
 // ═══════════════════════════════════════
@@ -443,28 +455,6 @@ function formatToolOutput(result) {
   return JSON.stringify(result, null, 2);
 }
 
-// ═══════════════════════════════════════
-// Input handling — textarea with auto-resize
-// ═══════════════════════════════════════
-
-chatForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  sendMessage();
-});
-
-messageInput.addEventListener('keydown', (e) => {
-  // Enter sends, Shift+Enter inserts newline
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-});
-
-// Auto-resize textarea
-messageInput.addEventListener('input', () => {
-  messageInput.style.height = 'auto';
-  messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
-});
 
 // ═══════════════════════════════════════
 // Image attachment
@@ -553,11 +543,20 @@ messageInput.addEventListener('drop', (e) => {
 // Paste images
 messageInput.addEventListener('paste', (e) => {
   const files = [];
+  let isImage = false;
   for (const item of e.clipboardData.items) {
-    if (!item.type.startsWith('image/')) continue;
-    files.push(item.getAsFile());
+    if (item.type.startsWith('image/')) {
+      files.push(item.getAsFile());
+      isImage = true;
+    }
   }
   if (files.length) addImageFiles(files);
+  
+  // Intercept text paste to insert plain text only
+  if (!isImage && e.clipboardData.getData('text/plain')) {
+    e.preventDefault();
+    document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+  }
 });
 
 function renderImagePreviews() {
@@ -589,10 +588,10 @@ function renderImagePreviews() {
 let messageQueue = [];
 
 function sendMessage() {
-  const message = messageInput.value.trim();
-  if (!message) return;
+  let message = getEditorText();
+  if (!message && pendingImages.length === 0) return;
 
-  messageInput.value = '';
+  messageInput.innerHTML = '';
   messageInput.style.height = 'auto';
 
   const cmd = {
@@ -923,6 +922,10 @@ document.addEventListener('keydown', (e) => {
       closeSettings();
       return;
     }
+    if (historyPanel && !historyPanel.classList.contains('hidden')) {
+      closeHistory();
+      return;
+    }
     if (!commandPalette.classList.contains('hidden')) {
       closeCommandPalette();
       return;
@@ -944,7 +947,7 @@ document.addEventListener('keydown', (e) => {
   // / — Focus message input (when not already in an input)
   if (e.key === '/' && !isInInput()) {
     e.preventDefault();
-    messageInput.focus();
+    chatInput.element.focus();
   }
 });
 
@@ -1048,7 +1051,7 @@ async function newSession() {
     sidebarEl.classList.add('collapsed');
     sidebarOverlay.classList.remove('visible');
   }
-  if (!isMobile()) messageInput.focus();
+  if (!isMobile()) chatInput.element.focus();
 }
 
 async function handleSessionSelect(session, project) {
@@ -1072,75 +1075,59 @@ async function switchSession(sessionFile, session = null, project = null) {
     messageRenderer.clear();
     toolCardRenderer.clear();
 
-    if (sessionFile && session) {
-      messageRenderer.renderSystemMessage('Loading session...');
-
-      const dirName = project?.dirName;
-      const file = session.file;
-      console.log('[App] Loading history:', { dirName, file, sessionFile });
-
-      if (dirName && file) {
-        try {
-          const res = await fetch(`/api/sessions/${dirName}/${file}`);
-          console.log('[App] History fetch status:', res.status);
-          const data = await res.json();
-          console.log('[App] History entries:', data.entries?.length || 0);
-
-          messageRenderer.clear();
-          renderSessionHistory(data.entries || []);
-        } catch (e) {
-          console.error('[App] History fetch error:', e);
-        }
-      } else {
-        console.log('[App] Skipped history load: dirName or file missing');
-      }
-    } else {
+    if (!sessionFile) {
       messageRenderer.renderWelcome();
+      return;
     }
 
-    // In mirror mode, check if this session is live on any instance
-    if (isMirrorMode) {
-      // Check if this session is live on a different instance
-      const otherInstance = liveInstances.find(i => i.sessionFile === sessionFile && i.port !== new URL(wsClient.url).port * 1);
-      if (otherInstance) {
-        // Reconnect to the other instance
-        const newUrl = `ws://${location.hostname}:${otherInstance.port}/ws`;
-        console.log(`[App] Switching to instance on port ${otherInstance.port}`);
-        wsClient.disconnect();
-        wsClient.url = newUrl;
-        wsClient.forceReconnect();
-        mirrorActiveSessionFile = sessionFile;
-        viewingActiveSession = true;
-        updateMirrorInputState();
+    messageRenderer.renderSystemMessage('Checking session instances...');
+
+    // Fetch fresh instances list
+    const res = await fetch('/api/instances');
+    const data = await res.json();
+    const liveInstances = data.instances || [];
+
+    const otherInstance = liveInstances.find(i => i.sessionFile === sessionFile);
+    if (otherInstance) {
+      if (otherInstance.port === parseInt(location.port || '80', 10) || (location.port === '' && otherInstance.port === 3001)) {
+        // It's the current one
+        wsClient.send({ type: 'mirror_sync_request' });
         return;
       }
-
-      // Check if this is the active session on the current instance
-      viewingActiveSession = sessionFile === mirrorActiveSessionFile;
-      updateMirrorInputState();
-
-      if (viewingActiveSession) {
-        // Re-request live state from the extension
-        wsClient.send({ type: 'mirror_sync_request' });
-      }
-    } else {
-      const res = await fetch('/api/sessions/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionFile }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        messageRenderer.renderError(`Failed to switch session: ${err.error}`);
-      }
+      
+      messageRenderer.renderSystemMessage('Redirecting to active session instance...');
+      window.location.href = `http://${location.hostname}:${otherInstance.port}`;
+      return;
     }
+
+    // It's not running anywhere. Ask server to spawn it.
+    messageRenderer.renderSystemMessage('Spawning Pi terminal for this session (waiting for iTerm2)...');
+    
+    const switchRes = await fetch('/api/sessions/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionFile })
+    });
+    
+    if (!switchRes.ok) {
+      const err = await switchRes.json();
+      messageRenderer.renderError(`Failed to switch session: ${err.error || 'Unknown error'}`);
+      return;
+    }
+
+    const switchData = await switchRes.json();
+    if (switchData.ok && switchData.port) {
+      messageRenderer.renderSystemMessage('Connecting to new session...');
+      window.location.href = `http://${location.hostname}:${switchData.port}`;
+    } else {
+      messageRenderer.renderError('Server responded ok, but no port provided.');
+    }
+
   } catch (error) {
     console.error('[App] Failed to switch session:', error);
-    messageRenderer.renderError('Failed to switch session');
+    messageRenderer.renderError('Failed to switch session: ' + error.message);
   }
 }
-
 // ═══════════════════════════════════════
 // Mirror mode sync
 // ═══════════════════════════════════════
@@ -1168,6 +1155,11 @@ function handleMirrorSync(data) {
   if (data.thinkingLevel) {
     currentThinkingLevel = data.thinkingLevel;
     updateThinkingBtn();
+  }
+
+  // Update session sidebar CWD
+  if (data.cwd && sidebar && sidebar.setCwd) {
+    sidebar.setCwd(data.cwd);
   }
 
   // Clear and render message history
@@ -1470,6 +1462,28 @@ const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
 const settingsOverlay = document.getElementById('settings-overlay');
 const settingsClose = document.getElementById('settings-close');
+
+// History
+const historyBtn = document.getElementById('history-btn');
+const historyOverlay = document.getElementById('history-overlay');
+const historyPanel = document.getElementById('history-panel');
+const historyClose = document.getElementById('history-close');
+
+function openHistory() {
+  historyOverlay.classList.remove('hidden');
+  historyPanel.classList.remove('hidden');
+  sidebar.loadSessions();
+}
+
+function closeHistory() {
+  historyOverlay.classList.add('hidden');
+  historyPanel.classList.add('hidden');
+}
+
+historyBtn?.addEventListener('click', openHistory);
+historyClose?.addEventListener('click', closeHistory);
+historyOverlay?.addEventListener('click', closeHistory);
+
 const themeGrid = document.getElementById('theme-grid');
 
 
@@ -1717,7 +1731,7 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       }
     }
     // Show live transcription in the input
-    messageInput.value = finalTranscript + interimTranscript;
+    chatInput.element.innerText = finalTranscript + interimTranscript;
     messageInput.dispatchEvent(new Event('input'));
   });
 
@@ -1742,13 +1756,13 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   });
 
   function startRecording() {
-    finalTranscript = messageInput.value; // Append to existing text
+    finalTranscript = getEditorText(); // Append to existing text
     interimTranscript = '';
     isRecording = true;
     micBtn.classList.add('recording');
     micBtn.title = 'Stop recording';
     recognition.start();
-    messageInput.focus();
+    chatInput.element.focus();
   }
 
   function stopRecording() {
@@ -1757,9 +1771,9 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
     micBtn.title = 'Voice input';
     try { recognition.stop(); } catch {}
     // Commit final transcript
-    messageInput.value = finalTranscript;
+    chatInput.element.innerText = finalTranscript;
     messageInput.dispatchEvent(new Event('input'));
-    messageInput.focus();
+    chatInput.element.focus();
   }
 } else {
   // No speech recognition support — hide mic button
@@ -1892,3 +1906,4 @@ if (splash) {
 }
 
 console.log('🚀 Tau initialized');
+
