@@ -14,9 +14,13 @@ A web UI that mirrors your [Pi](https://github.com/badlogic/pi-mono) terminal se
 
 Tau connects to your running Pi TUI and gives you a second view in the browser. Same session, same messages, same tools — just a different screen. Type in the terminal or the browser, both stay in sync.
 
+- **Antigravity / Cursor IDE Layout** — Three-pane workspace with a File Explorer (left), Code Viewer (center), and Chat (right).
+- **Inline Context Engine** — Type `@` to instantly fuzzy-search project files and inject them as beautiful, interactive UI chips directly into your text cursor.
+- **Smart Code Snippet Injection** — Highlight any text in the center code editor to spawn a floating "Add to Chat" button, injecting the exact file path and line numbers cleanly into your prompt.
+- **Strict Project History** — A dedicated Session History modal that filters your past chats strictly to your active Current Working Directory (CWD).
+- **Live session switching** — Click any historical session, and Tau will seamlessly open a new iTerm2 terminal tab, resume the session, and auto-redirect your browser.
 - **Live mirroring** — streams messages, tool calls, and thinking blocks in real-time
 - **Works on any device** — open it on your phone, tablet, or another monitor
-- **Session browser** — view history from any past session
 - **No extra process** — the Pi extension *is* the server
 
 ## Install
