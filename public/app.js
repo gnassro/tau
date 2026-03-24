@@ -587,12 +587,11 @@ function renderImagePreviews() {
 
 let messageQueue = [];
 
-function sendMessage() {
-  let message = getEditorText();
+function sendMessage(text) {
+  let message = text ?? chatInput.getText();
   if (!message && pendingImages.length === 0) return;
 
-  messageInput.innerHTML = '';
-  messageInput.style.height = 'auto';
+  chatInput.clear();
 
   const cmd = {
     type: 'prompt',
@@ -1756,7 +1755,7 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   });
 
   function startRecording() {
-    finalTranscript = getEditorText(); // Append to existing text
+    finalTranscript = chatInput.getText(); // Append to existing text
     interimTranscript = '';
     isRecording = true;
     micBtn.classList.add('recording');
